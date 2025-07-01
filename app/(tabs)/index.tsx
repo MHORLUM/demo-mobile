@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Buffer } from 'buffer';
 import mqtt from 'mqtt';
 import React, { useEffect, useState } from 'react';
-import { Dimensions, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { v4 as uuidv4 } from 'uuid';
 
 // Polyfills for MQTT in React Native
@@ -14,9 +14,12 @@ export default function App() {
   const [count, setCount] = useState(0);
   const [clientID, setClientID] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [heartbeatInterval, setHeartbeatInterval] = useState<number | null>(null);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [lastDisconnectTime, setLastDisconnectTime] = useState<string | null>(null);
 
   // Function to clear all stored data
   const clearStoredData = async () => {
@@ -29,6 +32,8 @@ export default function App() {
       setClientID(newId);
       setCount(0);
       setLastUpdated(null);
+      setReconnectAttempts(0);
+      setLastDisconnectTime(null);
     } catch (error) {
       console.log('Error clearing data:', error);
     }
@@ -69,6 +74,7 @@ export default function App() {
       client_id: id,
       timestamp: new Date().toISOString(),
       count: count,
+      status: isConnected ? 'online' : 'offline'
     };
     clientInstance.publish('clients/status', JSON.stringify(payload));
     console.log('Sent status update to server:', payload);
@@ -101,8 +107,14 @@ export default function App() {
 
   useEffect(() => {
     if (!clientID) return;
+    
+    setIsConnecting(true);
+    setConnectionMessage('กำลังเชื่อมต่อ...');
+    
     const client = mqtt.connect('ws://192.168.149.148:8083/mqtt', {
       clientId: clientID,
+      reconnectPeriod: 5000, // Reconnect every 5 seconds
+      connectTimeout: 10000, // Connection timeout (10 seconds)
     });
     
     const topic = `client/${clientID}/count`;
@@ -118,9 +130,11 @@ export default function App() {
         timestamp: new Date().toISOString()
       });
       setIsConnected(true);
+      setIsConnecting(false);
       sendStatusUpdate(client, clientID);
       startHeartbeat(client, clientID);
       setConnectionMessage('เชื่อมต่อ MQTT สำเร็จ!');
+      setReconnectAttempts(0);
       
       // Subscribe to count updates
       client.subscribe(topic, (err) => {
@@ -146,6 +160,13 @@ export default function App() {
       });
     });
 
+    client.on('reconnect', () => {
+      console.log('Attempting to reconnect to MQTT...');
+      setIsConnecting(true);
+      setConnectionMessage(`กำลังพยายามเชื่อมต่อใหม่... (${reconnectAttempts + 1})`);
+      setReconnectAttempts(prev => prev + 1);
+    });
+
     client.on('error', (err) => {
       console.log('MQTT connection error:', err);
       console.log('Error details:', {
@@ -154,6 +175,7 @@ export default function App() {
         stack: err.stack,
       });
       setIsConnected(false);
+      setIsConnecting(false);
       
       const errorCode = (err as any).code;
       const errorReason = errorCode === 'ENOTFOUND' ? 'ไม่พบเซิร์ฟเวอร์' : 
@@ -167,22 +189,28 @@ export default function App() {
     client.on('close', () => {
       console.log('MQTT disconnected');
       setIsConnected(false);
+      setIsConnecting(false);
       stopHeartbeat();
       setConnectionMessage('การเชื่อมต่อ MQTT ขาดหาย: การเชื่อมต่อถูกปิด');
+      setLastDisconnectTime(new Date().toISOString());
     });
 
     client.on('offline', () => {
       console.log('MQTT client is offline');
       setIsConnected(false);
+      setIsConnecting(false);
       stopHeartbeat();
       setConnectionMessage('การเชื่อมต่อ MQTT ขาดหาย: อุปกรณ์ออฟไลน์');
+      setLastDisconnectTime(new Date().toISOString());
     });
 
     client.on('disconnect', () => {
       console.log('MQTT client disconnected');
       setIsConnected(false);
+      setIsConnecting(false);
       stopHeartbeat();
       setConnectionMessage('การเชื่อมต่อ MQTT ขาดหาย: ถูกตัดการเชื่อมต่อ');
+      setLastDisconnectTime(new Date().toISOString());
     });
 
     client.on('message', async (topic, message) => {
@@ -284,10 +312,10 @@ export default function App() {
   }, [clientID]);
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <View style={styles.header}>
-        <Text style={styles.appTitle}>MQTT Counter</Text>
-        <Text style={styles.subtitle}>Real-time Data Dashboard</Text>
+        <Text style={styles.appTitle}>MQTT Reconnect Demo</Text>
+        <Text style={styles.subtitle}>การจัดการการเชื่อมต่อ MQTT</Text>
       </View>
       
       <View style={styles.card}>
@@ -302,29 +330,67 @@ export default function App() {
         </View>
         
         {connectionMessage && (
-          <View style={[styles.statusCard, isConnected ? styles.statusSuccess : styles.statusError]}>
+          <View style={[styles.statusCard, isConnected ? styles.statusSuccess : isConnecting ? styles.statusWarning : styles.statusError]}>
             <View style={styles.statusIndicator}>
-              <View style={[styles.statusDot, isConnected ? styles.dotConnected : styles.dotDisconnected]} />
-              <Text style={[styles.statusMessage, isConnected ? styles.connected : styles.disconnected]}>
+              {isConnecting ? (
+                <ActivityIndicator color="#3b82f6" size="small" style={styles.connectingIndicator} />
+              ) : (
+                <View style={[styles.statusDot, isConnected ? styles.dotConnected : styles.dotDisconnected]} />
+              )}
+              <Text style={[styles.statusMessage, isConnected ? styles.connected : isConnecting ? styles.connecting : styles.disconnected]}>
                 {connectionMessage}
               </Text>
             </View>
           </View>
         )}
         
+        <View style={styles.connectionStats}>
+          <Text style={styles.statsLabel}>การเชื่อมต่อปัจจุบัน:</Text>
+          <Text style={styles.statsValue}>
+            {isConnected ? 'เชื่อมต่ออยู่' : isConnecting ? 'กำลังเชื่อมต่อ...' : 'ตัดการเชื่อมต่อ'}
+          </Text>
+          
+          <Text style={styles.statsLabel}>ความพยายามเชื่อมต่อล่าสุด:</Text>
+          <Text style={styles.statsValue}>{reconnectAttempts} ครั้ง</Text>
+          
+          {lastDisconnectTime && (
+            <>
+              <Text style={styles.statsLabel}>ตัดการเชื่อมต่อล่าสุด:</Text>
+              <Text style={styles.statsValue}>{new Date(lastDisconnectTime).toLocaleTimeString()}</Text>
+            </>
+          )}
+        </View>
+        
         <View style={styles.countSection}>
-          <Text style={styles.countLabel}>Current Count</Text>
+          <Text style={styles.countLabel}>ค่า Count ปัจจุบัน</Text>
           <View style={styles.countContainer}>
             <Text style={styles.count}>{count}</Text>
           </View>
           {lastUpdated && (
             <Text style={styles.lastUpdated}>
-              Last updated: {new Date(lastUpdated).toLocaleString()}
+              อัปเดตล่าสุด: {new Date(lastUpdated).toLocaleString()}
             </Text>
           )}
         </View>
+        
+        <TouchableOpacity style={styles.resetButton} onPress={clearStoredData}>
+          <Text style={styles.resetButtonText}>รีเซ็ตข้อมูลทั้งหมด</Text>
+        </TouchableOpacity>
       </View>
-    </View>
+      
+      <View style={styles.infoBox}>
+        <Text style={styles.infoTitle}>การทำงานของระบบ MQTT Reconnect</Text>
+        <Text style={styles.infoText}>
+          • ระบบจะพยายามเชื่อมต่อใหม่ทุก 5 วินาทีเมื่อการเชื่อมต่อขาดหาย
+        </Text>
+        <Text style={styles.infoText}>
+          • Heartbeat จะส่งข้อมูลทุก 15 วินาทีเพื่อให้เซิร์ฟเวอร์ทราบสถานะ
+        </Text>
+        <Text style={styles.infoText}>
+          • ระบบจะบันทึกจำนวนครั้งที่พยายามเชื่อมต่อใหม่
+        </Text>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -333,23 +399,26 @@ const { width } = Dimensions.get('window');
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
-    paddingTop: 60,
+    backgroundColor: '#f0f9ff',
+  },
+  contentContainer: {
+    paddingTop: 50,
     paddingHorizontal: 20,
+    paddingBottom: 30,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 20,
   },
   appTitle: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#1e293b',
+    color: '#0c4a6e',
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
-    color: '#64748b',
+    color: '#0284c7',
     fontWeight: '500',
   },
   card: {
@@ -357,21 +426,21 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 24,
     marginHorizontal: 4,
-    shadowColor: '#000',
+    shadowColor: '#0284c7',
     shadowOffset: {
       width: 0,
       height: 4,
     },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 8,
   },
   clientInfo: {
     alignItems: 'center',
-    marginBottom: 24,
-    paddingBottom: 20,
+    marginBottom: 20,
+    paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: '#e0f2fe',
   },
   label: {
     fontSize: 14,
@@ -382,26 +451,31 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   clientId: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#3b82f6',
+    color: '#0369a1',
     fontFamily: 'monospace',
   },
   heartbeatStatus: {
     fontSize: 12,
     color: '#10b981',
-    marginTop: 4,
+    marginTop: 6,
     fontWeight: '600',
   },
   statusCard: {
     borderRadius: 12,
     padding: 16,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   statusSuccess: {
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
     borderColor: '#bbf7d0',
+  },
+  statusWarning: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
   },
   statusError: {
     backgroundColor: '#fef2f2',
@@ -411,12 +485,14 @@ const styles = StyleSheet.create({
   statusIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
   },
   statusDot: {
     width: 12,
     height: 12,
     borderRadius: 6,
+    marginRight: 10,
+  },
+  connectingIndicator: {
     marginRight: 10,
   },
   dotConnected: {
@@ -428,17 +504,38 @@ const styles = StyleSheet.create({
   statusMessage: {
     fontSize: 14,
     fontWeight: '600',
-    textAlign: 'center',
     flex: 1,
   },
   connected: {
     color: '#16a34a',
   },
+  connecting: {
+    color: '#ea580c',
+  },
   disconnected: {
     color: '#dc2626',
   },
+  connectionStats: {
+    backgroundColor: '#e0f2fe',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  statsLabel: {
+    fontSize: 13,
+    color: '#0c4a6e',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  statsValue: {
+    fontSize: 15,
+    color: '#0369a1',
+    fontWeight: '600',
+    marginBottom: 12,
+  },
   countSection: {
     alignItems: 'center',
+    marginBottom: 20,
   },
   countLabel: {
     fontSize: 16,
@@ -449,18 +546,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   countContainer: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f0f9ff',
     borderRadius: 16,
     padding: 24,
     minWidth: width * 0.4,
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#e2e8f0',
+    borderColor: '#bae6fd',
   },
   count: {
     fontSize: 64,
     fontWeight: 'bold',
-    color: '#3b82f6',
+    color: '#0284c7',
   },
   lastUpdated: {
     fontSize: 12,
@@ -468,9 +565,34 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
   },
-  title: {
-    fontSize: 20,
+  resetButton: {
+    backgroundColor: '#f87171',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+  },
+  resetButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  infoBox: {
+    backgroundColor: '#dbeafe',
+    borderRadius: 16,
+    padding: 20,
+    marginTop: 20,
     marginBottom: 20,
-    color: '#333',
+  },
+  infoTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1e40af',
+    marginBottom: 12,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#1e40af',
+    marginBottom: 8,
+    lineHeight: 20,
   },
 });
