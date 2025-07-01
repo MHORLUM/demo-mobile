@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Buffer } from 'buffer';
 import mqtt from 'mqtt';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { v4 as uuidv4 } from 'uuid';
 
 // Polyfills for MQTT in React Native
@@ -312,7 +312,7 @@ export default function App() {
   }, [clientID]);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+    <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.appTitle}>MQTT Reconnect Demo</Text>
         <Text style={styles.subtitle}>การจัดการการเชื่อมต่อ MQTT</Text>
@@ -390,7 +390,7 @@ export default function App() {
           • ระบบจะบันทึกจำนวนครั้งที่พยายามเชื่อมต่อใหม่
         </Text>
       </View>
-    </ScrollView>
+    </View>
   );
 }
 
@@ -400,11 +400,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f0f9ff',
-  },
-  contentContainer: {
     paddingTop: 50,
     paddingHorizontal: 20,
-    paddingBottom: 30,
   },
   header: {
     alignItems: 'center',
